@@ -18,6 +18,7 @@ func main() {
 	httpPort := flag.Int("http-port", 8080, "HTTP server port (Octo API)")
 	host := flag.String("host", "127.0.0.1", "hostname the client will connect to")
 	scene := flag.Int("scene", 0, "Bootstrap to scene N (0 = fresh start)")
+	latestScene := flag.Bool("latest-scene", false, "Bootstrap from the most recently saved snapshot (overrides -scene)")
 	starterItems := flag.Bool("starter-items", false, "Grant starter items to new users")
 	flag.Parse()
 
@@ -36,6 +37,14 @@ func main() {
 	snapshotDir := "snapshots"
 	if err := os.MkdirAll(snapshotDir, 0755); err != nil {
 		log.Fatalf("create snapshot dir: %v", err)
+	}
+	if *latestScene {
+		if id, ok := memory.LatestSnapshotSceneId(snapshotDir); ok {
+			*scene = int(id)
+			log.Printf("[latest-scene] auto-selected most recent snapshot: scene=%d", id)
+		} else {
+			log.Printf("[latest-scene] no snapshots found in %q; starting fresh", snapshotDir)
+		}
 	}
 
 	gameConfig, err := masterdata.LoadGameConfig()

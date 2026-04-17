@@ -6,15 +6,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 
 	"lunar-tear/server/internal/store"
 )
-
-// 0 = unlimited (no pruning); set to a positive value to cap stored snapshots.
-const maxSnapshots = 0
 
 func snapshotPath(dir string, sceneId int32) string {
 	return filepath.Join(dir, fmt.Sprintf("scene_%d.json", sceneId))
@@ -36,74 +32,52 @@ func saveSnapshot(user *store.UserState, dir string) {
 		return
 	}
 	log.Printf("[snapshot] saved scene=%d (%d bytes)", sceneId, len(data))
-	pruneSnapshots(dir)
 }
 
-// pruneSnapshots deletes the oldest scene_*.json files in dir, keeping only the maxSnapshots most recently modified ones.
-// When maxSnapshots is 0, pruning is disabled and all snapshots are kept.
-func pruneSnapshots(dir string) {
-	if maxSnapshots == 0 {
-		return
+// parseSceneId extracts the numeric scene ID from a filename of the form "scene_<id>.json".
+// Returns (0, false) if the name does not match the expected format.
+func parseSceneId(name string) (int32, bool) {
+	if !strings.HasPrefix(name, "scene_") || !strings.HasSuffix(name, ".json") {
+		return 0, false
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "scene_*.json"))
-	if err != nil || len(matches) <= maxSnapshots {
-		return
+	raw := strings.TrimSuffix(strings.TrimPrefix(name, "scene_"), ".json")
+	id, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil {
+		return 0, false
 	}
-
-	type entry struct {
-		path string
-		mod  int64
-	}
-	entries := make([]entry, 0, len(matches))
-	for _, p := range matches {
-		info, err := os.Stat(p)
-		if err != nil {
-			continue
-		}
-		entries = append(entries, entry{path: p, mod: info.ModTime().UnixNano()})
-	}
-
-	// Sort newest first.
-	sort.Slice(entries, func(i, j int) bool { return entries[i].mod > entries[j].mod })
-
-	for _, e := range entries[maxSnapshots:] {
-		if err := os.Remove(e.path); err != nil {
-			log.Printf("[snapshot] prune error %q: %v", e.path, err)
-			continue
-		}
-		log.Printf("[snapshot] pruned old snapshot %q", filepath.Base(e.path))
-	}
+	return int32(id), true
 }
 
 // LatestSnapshotSceneId scans dir for scene_*.json files and returns the scene ID
 // of the most recently modified snapshot. Returns (0, false) if none are found.
 func LatestSnapshotSceneId(dir string) (int32, bool) {
-	matches, err := filepath.Glob(filepath.Join(dir, "scene_*.json"))
-	if err != nil || len(matches) == 0 {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
 		return 0, false
 	}
-	var latestPath string
+	var latestId int32
 	var latestMod int64
-	for _, p := range matches {
-		info, err := os.Stat(p)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		id, ok := parseSceneId(e.Name())
+		if !ok {
+			continue
+		}
+		info, err := e.Info()
 		if err != nil {
 			continue
 		}
 		if mt := info.ModTime().UnixNano(); mt > latestMod {
 			latestMod = mt
-			latestPath = p
+			latestId = id
 		}
 	}
-	if latestPath == "" {
+	if latestId == 0 {
 		return 0, false
 	}
-	base := filepath.Base(latestPath)
-	name := strings.TrimSuffix(strings.TrimPrefix(base, "scene_"), ".json")
-	id, err := strconv.ParseInt(name, 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return int32(id), true
+	return latestId, true
 }
 
 func loadSnapshot(dir string, sceneId int32) (*store.UserState, error) {
